@@ -1,0 +1,13 @@
+[project]
+name = "m365-security-operations-mcp"
+version = "0.1.0"
+description = "Standalone MCP server for Microsoft 365 security and compliance tools"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "azure-identity>=1.25.2",
+    "python-dotenv>=1.0.1",
+    "fastmcp>=3.1.0",
+    "microsoft-kiota-abstractions>=1.9.9",
+    "msgraph-sdk>=1.55.0",
+]
