@@ -194,6 +194,79 @@ async def get_email_events_enriched(
     return json.dumps(result, indent=2, default=str)
 
 
+@mcp.tool()
+async def list_ediscovery_cases(top: int = 50, search: str | None = None) -> str:
+    """List Microsoft Purview eDiscovery cases available to the signed-in user."""
+    client = get_singleton_client()
+    results = await security_assistant.list_ediscovery_cases(client, top=top, search=search)
+    return json.dumps(results, indent=2, default=str)
+
+
+@mcp.tool()
+async def get_ediscovery_case(case_id: str) -> str:
+    """Get a single Microsoft Purview eDiscovery case."""
+    client = get_singleton_client()
+    result = await security_assistant.get_ediscovery_case(client, case_id=case_id)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def list_ediscovery_custodians(case_id: str, top: int = 100) -> str:
+    """List custodians assigned to a Microsoft Purview eDiscovery case."""
+    client = get_singleton_client()
+    result = await security_assistant.list_ediscovery_custodians(client, case_id=case_id, top=top)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def list_ediscovery_searches(case_id: str, top: int = 100) -> str:
+    """List searches in a Microsoft Purview eDiscovery case."""
+    client = get_singleton_client()
+    result = await security_assistant.list_ediscovery_searches(client, case_id=case_id, top=top)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def list_ediscovery_case_operations(case_id: str, top: int = 100) -> str:
+    """List long-running operations in a Microsoft Purview eDiscovery case."""
+    client = get_singleton_client()
+    result = await security_assistant.list_ediscovery_case_operations(client, case_id=case_id, top=top)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def get_ediscovery_operation(case_id: str, operation_id: str) -> str:
+    """Get a specific long-running operation from a Microsoft Purview eDiscovery case."""
+    client = get_singleton_client()
+    result = await security_assistant.get_ediscovery_operation(client, case_id=case_id, operation_id=operation_id)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def list_ediscovery_noncustodial_data_sources(case_id: str, top: int = 100) -> str:
+    """List noncustodial data sources for a Microsoft Purview eDiscovery case."""
+    client = get_singleton_client()
+    result = await security_assistant.list_ediscovery_noncustodial_data_sources(client, case_id=case_id, top=top)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+async def estimate_ediscovery_search_statistics(
+    case_id: str,
+    search_id: str,
+    statistics_options: list[str] | None = None,
+) -> str:
+    """Submit a Microsoft Purview eDiscovery estimate statistics operation for a search."""
+    client = get_singleton_client()
+    result = await security_assistant.estimate_ediscovery_search_statistics(
+        client,
+        case_id=case_id,
+        search_id=search_id,
+        statistics_options=statistics_options,
+    )
+    return json.dumps(result, indent=2, default=str)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="M365 Security MCP Server")
     parser.add_argument(

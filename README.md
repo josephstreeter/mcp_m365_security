@@ -43,12 +43,26 @@ Configured scopes are defined in `modules/graph_client.py`.
 | `IdentityRiskyUser.Read.All` | `get_risky_users` |
 | `DeviceManagementManagedDevices.Read.All` | `get_managed_devices` |
 | `Policy.Read.All` | `get_conditional_access_policies`, `get_named_locations` |
+| `eDiscovery.Read.All` | `list_ediscovery_cases`, `get_ediscovery_case`, `list_ediscovery_custodians`, `list_ediscovery_searches`, `list_ediscovery_case_operations`, `get_ediscovery_operation`, `list_ediscovery_noncustodial_data_sources`, `estimate_ediscovery_search_statistics` |
 | `Group.Read.All` | `get_group_by_id`, `get_entra_groups` |
 | `User.Read`, `User.Read.All` | `get_user_authentication_methods`, `get_user_devices` |
 | `UserAuthenticationMethod.Read.All` | `get_user_authentication_methods` |
 | `Device.Read.All` | `get_user_devices` |
 
 `get_attack_simulator_simulations` uses the Security attack simulation endpoint and is covered by `SecurityAlert.Read.All` and broader Microsoft 365 Defender security permissions already requested.
+
+Purview eDiscovery tools also require the signed-in user to hold an appropriate Microsoft Purview role such as `eDiscovery Manager` or `eDiscovery Administrator`. `estimate_ediscovery_search_statistics` submits a case operation and returns the Graph operation location for later tracking.
+
+## Purview eDiscovery Tools
+
+- `list_ediscovery_cases` - Inventory accessible eDiscovery cases
+- `get_ediscovery_case` - Fetch a single case record
+- `list_ediscovery_custodians` - Show custodians and hold status for a case
+- `list_ediscovery_searches` - Show searches and query details for a case
+- `list_ediscovery_case_operations` - Monitor indexing, hold, estimate, export, and purge operations
+- `get_ediscovery_operation` - Fetch a single operation with status and result details
+- `list_ediscovery_noncustodial_data_sources` - Show site and workload sources attached outside custodians
+- `estimate_ediscovery_search_statistics` - Submit a search estimate job and return its operation location
 
 ## Run
 

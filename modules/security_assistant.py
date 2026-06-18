@@ -1,12 +1,16 @@
 """
 Security and compliance functions for Microsoft 365.
 Handles sign-in logs, security alerts, risky users, audit logs,
-managed devices, conditional access policies, and threat hunting.
+managed devices, conditional access policies, threat hunting,
+and Purview eDiscovery investigations.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from kiota_abstractions.base_request_configuration import RequestConfiguration
+from kiota_abstractions.method import Method
+from kiota_abstractions.request_information import RequestInformation
 from msgraph.graph_service_client import GraphServiceClient
 from msgraph.generated.audit_logs.sign_ins.sign_ins_request_builder import SignInsRequestBuilder
 from msgraph.generated.security.alerts_v2.alerts_v2_request_builder import Alerts_v2RequestBuilder  # type: ignore
@@ -15,8 +19,175 @@ from msgraph.generated.audit_logs.directory_audits.directory_audits_request_buil
 from msgraph.generated.device_management.managed_devices.managed_devices_request_builder import ManagedDevicesRequestBuilder
 from msgraph.generated.security.microsoft_graph_security_run_hunting_query.run_hunting_query_post_request_body import RunHuntingQueryPostRequestBody
 from msgraph.generated.groups.groups_request_builder import GroupsRequestBuilder
+from msgraph.generated.security.cases.ediscovery_cases.ediscovery_cases_request_builder import EdiscoveryCasesRequestBuilder
 
 logger = logging.getLogger(__name__)
+
+
+def _enum_value(value) -> str | None:
+    """Normalize Kiota enum instances to plain strings."""
+    if value is None:
+        return None
+    return getattr(value, "value", str(value))
+
+
+def _iso_datetime(value) -> str | None:
+    """Serialize datetimes consistently for JSON responses."""
+    return str(value) if value else None
+
+
+def _identity_summary(identity_set) -> dict | None:
+    """Flatten a Graph IdentitySet into a compact dictionary."""
+    if not identity_set:
+        return None
+
+    user = getattr(identity_set, "user", None)
+    application = getattr(identity_set, "application", None)
+    device = getattr(identity_set, "device", None)
+
+    summary: dict[str, dict] = {}
+    if user:
+        summary["user"] = {
+            "id": getattr(user, "id", None),
+            "display_name": getattr(user, "display_name", None),
+            "user_principal_name": getattr(user, "user_principal_name", None),
+        }
+    if application:
+        summary["application"] = {
+            "id": getattr(application, "id", None),
+            "display_name": getattr(application, "display_name", None),
+        }
+    if device:
+        summary["device"] = {
+            "id": getattr(device, "id", None),
+            "display_name": getattr(device, "display_name", None),
+        }
+    return summary or None
+
+
+def _format_case(case) -> dict:
+    return {
+        "id": case.id,
+        "display_name": case.display_name,
+        "description": case.description,
+        "status": _enum_value(case.status),
+        "external_id": getattr(case, "external_id", None),
+        "created": _iso_datetime(case.created_date_time),
+        "last_modified": _iso_datetime(case.last_modified_date_time),
+        "closed": _iso_datetime(getattr(case, "closed_date_time", None)),
+        "last_modified_by": _identity_summary(case.last_modified_by),
+        "closed_by": _identity_summary(getattr(case, "closed_by", None)),
+    }
+
+
+def _format_operation(operation) -> dict:
+    result_info = getattr(operation, "result_info", None)
+    return {
+        "id": operation.id,
+        "type": getattr(operation, "odata_type", None),
+        "action": _enum_value(operation.action),
+        "status": _enum_value(operation.status),
+        "percent_progress": getattr(operation, "percent_progress", None),
+        "created": _iso_datetime(getattr(operation, "created_date_time", None)),
+        "completed": _iso_datetime(getattr(operation, "completed_date_time", None)),
+        "created_by": _identity_summary(getattr(operation, "created_by", None)),
+        "result_info": {
+            "code": getattr(result_info, "code", None),
+            "message": getattr(result_info, "message", None),
+            "subcode": getattr(result_info, "subcode", None),
+        } if result_info else None,
+    }
+
+
+def _format_data_source(data_source) -> dict | None:
+    if not data_source:
+        return None
+
+    site = getattr(data_source, "site", None)
+    return {
+        "id": getattr(data_source, "id", None),
+        "type": getattr(data_source, "odata_type", None),
+        "display_name": getattr(data_source, "display_name", None),
+        "created": _iso_datetime(getattr(data_source, "created_date_time", None)),
+        "hold_status": _enum_value(getattr(data_source, "hold_status", None)),
+        "web_url": getattr(site, "web_url", None) if site else None,
+    }
+
+
+def _format_custodian(custodian) -> dict:
+    return {
+        "id": custodian.id,
+        "display_name": custodian.display_name,
+        "email": getattr(custodian, "email", None),
+        "status": _enum_value(getattr(custodian, "status", None)),
+        "hold_status": _enum_value(getattr(custodian, "hold_status", None)),
+        "created": _iso_datetime(getattr(custodian, "created_date_time", None)),
+        "last_modified": _iso_datetime(getattr(custodian, "last_modified_date_time", None)),
+        "released": _iso_datetime(getattr(custodian, "released_date_time", None)),
+        "acknowledged": _iso_datetime(getattr(custodian, "acknowledged_date_time", None)),
+        "last_index_operation": _format_operation(getattr(custodian, "last_index_operation", None)) if getattr(custodian, "last_index_operation", None) else None,
+        "source_counts": {
+            "user_sources": len(getattr(custodian, "user_sources", []) or []),
+            "site_sources": len(getattr(custodian, "site_sources", []) or []),
+            "unified_group_sources": len(getattr(custodian, "unified_group_sources", []) or []),
+        },
+    }
+
+
+def _format_search(search) -> dict:
+    scopes = getattr(search, "data_source_scopes", None)
+    scope_values = [_enum_value(scope) for scope in scopes] if scopes else []
+    last_estimate = getattr(search, "last_estimate_statistics_operation", None)
+    return {
+        "id": search.id,
+        "display_name": getattr(search, "display_name", None),
+        "description": getattr(search, "description", None),
+        "content_query": getattr(search, "content_query", None),
+        "created": _iso_datetime(getattr(search, "created_date_time", None)),
+        "last_modified": _iso_datetime(getattr(search, "last_modified_date_time", None)),
+        "created_by": _identity_summary(getattr(search, "created_by", None)),
+        "last_modified_by": _identity_summary(getattr(search, "last_modified_by", None)),
+        "data_source_scopes": scope_values,
+        "additional_source_count": len(getattr(search, "additional_sources", []) or []),
+        "custodian_source_count": len(getattr(search, "custodian_sources", []) or []),
+        "noncustodial_source_count": len(getattr(search, "noncustodial_sources", []) or []),
+        "last_estimate_statistics_operation": _format_operation(last_estimate) if last_estimate else None,
+    }
+
+
+def _format_noncustodial_data_source(source) -> dict:
+    return {
+        "id": source.id,
+        "display_name": getattr(source, "display_name", None),
+        "status": _enum_value(getattr(source, "status", None)),
+        "hold_status": _enum_value(getattr(source, "hold_status", None)),
+        "created": _iso_datetime(getattr(source, "created_date_time", None)),
+        "last_modified": _iso_datetime(getattr(source, "last_modified_date_time", None)),
+        "released": _iso_datetime(getattr(source, "released_date_time", None)),
+        "data_source": _format_data_source(getattr(source, "data_source", None)),
+        "last_index_operation": _format_operation(getattr(source, "last_index_operation", None)) if getattr(source, "last_index_operation", None) else None,
+    }
+
+
+async def _post_graph_json(client: GraphServiceClient, request_info: RequestInformation, payload: dict) -> dict:
+    """Send a raw authenticated Graph request when generated builders omit request bodies."""
+    request_info.headers.try_add("Content-Type", "application/json")
+    request_info.content = json.dumps(payload).encode("utf-8")
+
+    request = await client.request_adapter.convert_to_native_async(request_info)
+    response = await client.request_adapter._http_client.send(request)
+    response.raise_for_status()
+
+    result = {
+        "status_code": response.status_code,
+        "operation_location": response.headers.get("Location"),
+    }
+    if response.content:
+        try:
+            result["body"] = response.json()
+        except ValueError:
+            result["body"] = response.text
+    return result
 
 
 # Sign-in Logs
@@ -895,6 +1066,178 @@ async def get_url_click_events(client: GraphServiceClient, user_upn: str, days: 
     except Exception as e:
         logger.error(f"Failed to get URL click events for user {user_upn}: {e}")
         return {"error": f"Failed to get URL click events: {str(e)}"}
+
+
+# Purview eDiscovery
+
+async def list_ediscovery_cases(client: GraphServiceClient, top: int = 50, search: str | None = None) -> list[dict]:
+    """List Purview eDiscovery cases available to the signed-in user."""
+    try:
+        query_params = EdiscoveryCasesRequestBuilder.EdiscoveryCasesRequestBuilderGetQueryParameters(
+            top=top,
+            orderby=["lastModifiedDateTime desc"],
+            select=["id", "displayName", "description", "status", "externalId", "createdDateTime", "lastModifiedDateTime"],
+        )
+        if search:
+            safe_search = search.replace("'", "''")
+            query_params.filter = f"contains(displayName,'{safe_search}')"
+
+        request_config = RequestConfiguration[EdiscoveryCasesRequestBuilder.EdiscoveryCasesRequestBuilderGetQueryParameters](
+            query_parameters=query_params,
+        )
+        response = await client.security.cases.ediscovery_cases.get(request_configuration=request_config)
+        return [_format_case(case) for case in (response.value or [])] if response and response.value else []
+    except Exception as e:
+        logger.error(f"Failed to list eDiscovery cases: {e}")
+        return [{"error": f"Failed to list eDiscovery cases: {str(e)}"}]
+
+
+async def get_ediscovery_case(client: GraphServiceClient, case_id: str) -> dict:
+    """Get a single Purview eDiscovery case."""
+    try:
+        case = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).get()
+        if not case:
+            return {"error": f"eDiscovery case {case_id} not found"}
+        return _format_case(case)
+    except Exception as e:
+        logger.error(f"Failed to get eDiscovery case {case_id}: {e}")
+        return {"error": f"Failed to get eDiscovery case: {str(e)}"}
+
+
+async def list_ediscovery_custodians(client: GraphServiceClient, case_id: str, top: int = 100) -> list[dict]:
+    """List custodians assigned to a Purview eDiscovery case."""
+    try:
+        from msgraph.generated.security.cases.ediscovery_cases.item.custodians.custodians_request_builder import CustodiansRequestBuilder
+
+        query_params = CustodiansRequestBuilder.CustodiansRequestBuilderGetQueryParameters(
+            top=top,
+            orderby=["lastModifiedDateTime desc"],
+        )
+        request_config = RequestConfiguration[CustodiansRequestBuilder.CustodiansRequestBuilderGetQueryParameters](
+            query_parameters=query_params,
+        )
+        response = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).custodians.get(
+            request_configuration=request_config,
+        )
+        return [_format_custodian(custodian) for custodian in (response.value or [])] if response and response.value else []
+    except Exception as e:
+        logger.error(f"Failed to list custodians for case {case_id}: {e}")
+        return [{"error": f"Failed to list eDiscovery custodians: {str(e)}"}]
+
+
+async def list_ediscovery_searches(client: GraphServiceClient, case_id: str, top: int = 100) -> list[dict]:
+    """List searches in a Purview eDiscovery case."""
+    try:
+        from msgraph.generated.security.cases.ediscovery_cases.item.searches.searches_request_builder import SearchesRequestBuilder
+
+        query_params = SearchesRequestBuilder.SearchesRequestBuilderGetQueryParameters(
+            top=top,
+            orderby=["lastModifiedDateTime desc"],
+        )
+        request_config = RequestConfiguration[SearchesRequestBuilder.SearchesRequestBuilderGetQueryParameters](
+            query_parameters=query_params,
+        )
+        response = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).searches.get(
+            request_configuration=request_config,
+        )
+        return [_format_search(search) for search in (response.value or [])] if response and response.value else []
+    except Exception as e:
+        logger.error(f"Failed to list searches for case {case_id}: {e}")
+        return [{"error": f"Failed to list eDiscovery searches: {str(e)}"}]
+
+
+async def list_ediscovery_case_operations(client: GraphServiceClient, case_id: str, top: int = 100) -> list[dict]:
+    """List long-running operations for a Purview eDiscovery case."""
+    try:
+        from msgraph.generated.security.cases.ediscovery_cases.item.operations.operations_request_builder import OperationsRequestBuilder
+
+        query_params = OperationsRequestBuilder.OperationsRequestBuilderGetQueryParameters(
+            top=top,
+            orderby=["createdDateTime desc"],
+        )
+        request_config = RequestConfiguration[OperationsRequestBuilder.OperationsRequestBuilderGetQueryParameters](
+            query_parameters=query_params,
+        )
+        request_config.headers = {"Prefer": "include-unknown-enum-members"}
+        response = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).operations.get(
+            request_configuration=request_config,
+        )
+        return [_format_operation(operation) for operation in (response.value or [])] if response and response.value else []
+    except Exception as e:
+        logger.error(f"Failed to list operations for case {case_id}: {e}")
+        return [{"error": f"Failed to list eDiscovery operations: {str(e)}"}]
+
+
+async def get_ediscovery_operation(client: GraphServiceClient, case_id: str, operation_id: str) -> dict:
+    """Get a specific Purview eDiscovery operation."""
+    try:
+        request_config = RequestConfiguration()
+        request_config.headers = {"Prefer": "include-unknown-enum-members"}
+        operation = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).operations.by_case_operation_id(operation_id).get(
+            request_configuration=request_config,
+        )
+        if not operation:
+            return {"error": f"eDiscovery operation {operation_id} not found"}
+        return _format_operation(operation)
+    except Exception as e:
+        logger.error(f"Failed to get operation {operation_id} for case {case_id}: {e}")
+        return {"error": f"Failed to get eDiscovery operation: {str(e)}"}
+
+
+async def list_ediscovery_noncustodial_data_sources(client: GraphServiceClient, case_id: str, top: int = 100) -> list[dict]:
+    """List noncustodial data sources attached to a Purview eDiscovery case."""
+    try:
+        from msgraph.generated.security.cases.ediscovery_cases.item.noncustodial_data_sources.noncustodial_data_sources_request_builder import NoncustodialDataSourcesRequestBuilder
+
+        query_params = NoncustodialDataSourcesRequestBuilder.NoncustodialDataSourcesRequestBuilderGetQueryParameters(
+            top=top,
+            orderby=["lastModifiedDateTime desc"],
+            expand=["dataSource"],
+        )
+        request_config = RequestConfiguration[NoncustodialDataSourcesRequestBuilder.NoncustodialDataSourcesRequestBuilderGetQueryParameters](
+            query_parameters=query_params,
+        )
+        response = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).noncustodial_data_sources.get(
+            request_configuration=request_config,
+        )
+        return [_format_noncustodial_data_source(source) for source in (response.value or [])] if response and response.value else []
+    except Exception as e:
+        logger.error(f"Failed to list noncustodial data sources for case {case_id}: {e}")
+        return [{"error": f"Failed to list eDiscovery noncustodial data sources: {str(e)}"}]
+
+
+async def estimate_ediscovery_search_statistics(
+    client: GraphServiceClient,
+    case_id: str,
+    search_id: str,
+    statistics_options: list[str] | None = None,
+) -> dict:
+    """Submit a Purview eDiscovery estimate statistics operation for a search."""
+    try:
+        options = statistics_options or [
+            "includeRefiners",
+            "includeQueryStats",
+            "includeUnindexedStats",
+            "advancedIndexing",
+            "locationsWithoutHits",
+        ]
+
+        builder = client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).searches.by_ediscovery_search_id(search_id).microsoft_graph_security_estimate_statistics
+        request_info = builder.to_post_request_information()
+        result = await _post_graph_json(
+            client,
+            request_info,
+            {"statisticsOptions": ", ".join(options)},
+        )
+        result.update({
+            "case_id": case_id,
+            "search_id": search_id,
+            "statistics_options": options,
+        })
+        return result
+    except Exception as e:
+        logger.error(f"Failed to estimate statistics for case {case_id} search {search_id}: {e}")
+        return {"error": f"Failed to estimate eDiscovery search statistics: {str(e)}"}
 
 
 # Attack Simulator

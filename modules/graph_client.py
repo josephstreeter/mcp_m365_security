@@ -18,6 +18,7 @@ ALL_SCOPES = [
     'User.Read.All',
     'AuditLog.Read.All',
     'ThreatHunting.Read.All',
+    'eDiscovery.Read.All',
     'Group.Read.All',
     'SecurityAlert.Read.All',
     'IdentityRiskyUser.Read.All',
