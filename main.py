@@ -211,6 +211,14 @@ async def get_ediscovery_case(case_id: str) -> str:
 
 
 @mcp.tool()
+async def list_ediscovery_case_members(case_id: str, top: int = 100) -> str:
+    """List members assigned to a Microsoft Purview eDiscovery case."""
+    client = get_singleton_client()
+    result = await security_assistant.list_ediscovery_case_members(client, case_id=case_id, top=top)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
 async def list_ediscovery_custodians(case_id: str, top: int = 100) -> str:
     """List custodians assigned to a Microsoft Purview eDiscovery case."""
     client = get_singleton_client()
@@ -251,10 +259,21 @@ async def list_ediscovery_noncustodial_data_sources(case_id: str, top: int = 100
 
 
 @mcp.tool()
+async def list_ediscovery_review_sets(case_id: str, top: int = 100) -> str:
+    """List review sets for a Microsoft Purview eDiscovery case."""
+    client = get_singleton_client()
+    result = await security_assistant.list_ediscovery_review_sets(client, case_id=case_id, top=top)
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
 async def estimate_ediscovery_search_statistics(
     case_id: str,
     search_id: str,
     statistics_options: list[str] | None = None,
+    wait_for_completion: bool = False,
+    max_polls: int = 15,
+    poll_interval_seconds: float = 2.0,
 ) -> str:
     """Submit a Microsoft Purview eDiscovery estimate statistics operation for a search."""
     client = get_singleton_client()
@@ -263,6 +282,9 @@ async def estimate_ediscovery_search_statistics(
         case_id=case_id,
         search_id=search_id,
         statistics_options=statistics_options,
+        wait_for_completion=wait_for_completion,
+        max_polls=max_polls,
+        poll_interval_seconds=poll_interval_seconds,
     )
     return json.dumps(result, indent=2, default=str)
 

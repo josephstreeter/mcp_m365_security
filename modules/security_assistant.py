@@ -5,8 +5,10 @@ managed devices, conditional access policies, threat hunting,
 and Purview eDiscovery investigations.
 """
 
+import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from kiota_abstractions.base_request_configuration import RequestConfiguration
 from kiota_abstractions.method import Method
@@ -169,13 +171,53 @@ def _format_noncustodial_data_source(source) -> dict:
     }
 
 
+def _format_case_member(member) -> dict:
+    recipient_type = getattr(member, "recipient_type", None)
+    if isinstance(recipient_type, list):
+        recipient_type_value = [_enum_value(item) for item in recipient_type]
+    else:
+        recipient_type_value = _enum_value(recipient_type)
+
+    return {
+        "id": member.id,
+        "display_name": getattr(member, "display_name", None),
+        "smtp_address": getattr(member, "smtp_address", None),
+        "recipient_type": recipient_type_value,
+    }
+
+
+def _format_review_set(review_set) -> dict:
+    return {
+        "id": review_set.id,
+        "display_name": getattr(review_set, "display_name", None),
+        "description": getattr(review_set, "description", None),
+        "created": _iso_datetime(getattr(review_set, "created_date_time", None)),
+        "created_by": _identity_summary(getattr(review_set, "created_by", None)),
+        "query_count": len(getattr(review_set, "queries", []) or []),
+    }
+
+
+def _extract_ediscovery_operation_ids(operation_location: str | None) -> tuple[str, str] | None:
+    """Extract case and operation IDs from an eDiscovery operation URL."""
+    if not operation_location:
+        return None
+
+    match = re.search(r"ediscoverycases\('([^']+)'\)/operations\('([^']+)'\)", operation_location, re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
 async def _post_graph_json(client: GraphServiceClient, request_info: RequestInformation, payload: dict) -> dict:
     """Send a raw authenticated Graph request when generated builders omit request bodies."""
     request_info.headers.try_add("Content-Type", "application/json")
     request_info.content = json.dumps(payload).encode("utf-8")
 
     request = await client.request_adapter.convert_to_native_async(request_info)
-    response = await client.request_adapter._http_client.send(request)
+    http_client = getattr(client.request_adapter, "_http_client", None)
+    if http_client is None:
+        raise RuntimeError("Graph request adapter does not expose an HTTP client")
+    response = await http_client.send(request)
     response.raise_for_status()
 
     result = {
@@ -1104,6 +1146,27 @@ async def get_ediscovery_case(client: GraphServiceClient, case_id: str) -> dict:
         return {"error": f"Failed to get eDiscovery case: {str(e)}"}
 
 
+async def list_ediscovery_case_members(client: GraphServiceClient, case_id: str, top: int = 100) -> list[dict]:
+    """List members assigned to a Purview eDiscovery case."""
+    try:
+        from msgraph.generated.security.cases.ediscovery_cases.item.case_members.case_members_request_builder import CaseMembersRequestBuilder
+
+        query_params = CaseMembersRequestBuilder.CaseMembersRequestBuilderGetQueryParameters(
+            top=top,
+            orderby=["displayName"],
+        )
+        request_config = RequestConfiguration[CaseMembersRequestBuilder.CaseMembersRequestBuilderGetQueryParameters](
+            query_parameters=query_params,
+        )
+        response = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).case_members.get(
+            request_configuration=request_config,
+        )
+        return [_format_case_member(member) for member in (response.value or [])] if response and response.value else []
+    except Exception as e:
+        logger.error(f"Failed to list case members for case {case_id}: {e}")
+        return [{"error": f"Failed to list eDiscovery case members: {str(e)}"}]
+
+
 async def list_ediscovery_custodians(client: GraphServiceClient, case_id: str, top: int = 100) -> list[dict]:
     """List custodians assigned to a Purview eDiscovery case."""
     try:
@@ -1158,7 +1221,7 @@ async def list_ediscovery_case_operations(client: GraphServiceClient, case_id: s
         request_config = RequestConfiguration[OperationsRequestBuilder.OperationsRequestBuilderGetQueryParameters](
             query_parameters=query_params,
         )
-        request_config.headers = {"Prefer": "include-unknown-enum-members"}
+        request_config.headers.try_add("Prefer", "include-unknown-enum-members")
         response = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).operations.get(
             request_configuration=request_config,
         )
@@ -1172,7 +1235,7 @@ async def get_ediscovery_operation(client: GraphServiceClient, case_id: str, ope
     """Get a specific Purview eDiscovery operation."""
     try:
         request_config = RequestConfiguration()
-        request_config.headers = {"Prefer": "include-unknown-enum-members"}
+        request_config.headers.try_add("Prefer", "include-unknown-enum-members")
         operation = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).operations.by_case_operation_id(operation_id).get(
             request_configuration=request_config,
         )
@@ -1206,11 +1269,35 @@ async def list_ediscovery_noncustodial_data_sources(client: GraphServiceClient, 
         return [{"error": f"Failed to list eDiscovery noncustodial data sources: {str(e)}"}]
 
 
+async def list_ediscovery_review_sets(client: GraphServiceClient, case_id: str, top: int = 100) -> list[dict]:
+    """List review sets attached to a Purview eDiscovery case."""
+    try:
+        from msgraph.generated.security.cases.ediscovery_cases.item.review_sets.review_sets_request_builder import ReviewSetsRequestBuilder
+
+        query_params = ReviewSetsRequestBuilder.ReviewSetsRequestBuilderGetQueryParameters(
+            top=top,
+            orderby=["createdDateTime desc"],
+        )
+        request_config = RequestConfiguration[ReviewSetsRequestBuilder.ReviewSetsRequestBuilderGetQueryParameters](
+            query_parameters=query_params,
+        )
+        response = await client.security.cases.ediscovery_cases.by_ediscovery_case_id(case_id).review_sets.get(
+            request_configuration=request_config,
+        )
+        return [_format_review_set(review_set) for review_set in (response.value or [])] if response and response.value else []
+    except Exception as e:
+        logger.error(f"Failed to list review sets for case {case_id}: {e}")
+        return [{"error": f"Failed to list eDiscovery review sets: {str(e)}"}]
+
+
 async def estimate_ediscovery_search_statistics(
     client: GraphServiceClient,
     case_id: str,
     search_id: str,
     statistics_options: list[str] | None = None,
+    wait_for_completion: bool = False,
+    max_polls: int = 15,
+    poll_interval_seconds: float = 2.0,
 ) -> dict:
     """Submit a Purview eDiscovery estimate statistics operation for a search."""
     try:
@@ -1229,11 +1316,37 @@ async def estimate_ediscovery_search_statistics(
             request_info,
             {"statisticsOptions": ", ".join(options)},
         )
+        operation_ids = _extract_ediscovery_operation_ids(result.get("operation_location"))
         result.update({
             "case_id": case_id,
             "search_id": search_id,
             "statistics_options": options,
+            "wait_for_completion": wait_for_completion,
         })
+
+        if operation_ids:
+            result["operation"] = {
+                "case_id": operation_ids[0],
+                "operation_id": operation_ids[1],
+            }
+
+        if wait_for_completion:
+            if not operation_ids:
+                result["warning"] = "Estimate submitted, but operation location could not be parsed for polling."
+                return result
+
+            terminal_statuses = {"succeeded", "partiallySucceeded", "failed", "submissionFailed"}
+            polls = 0
+            while polls < max_polls:
+                polls += 1
+                operation = await get_ediscovery_operation(client, operation_ids[0], operation_ids[1])
+                result["final_operation"] = operation
+                result["poll_count"] = polls
+                status = operation.get("status") if isinstance(operation, dict) else None
+                if status in terminal_statuses or "error" in operation:
+                    break
+                await asyncio.sleep(poll_interval_seconds)
+
         return result
     except Exception as e:
         logger.error(f"Failed to estimate statistics for case {case_id} search {search_id}: {e}")

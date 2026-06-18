@@ -11,3 +11,8 @@ dependencies = [
     "microsoft-kiota-abstractions>=1.9.9",
     "msgraph-sdk>=1.55.0",
 ]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=9.1.0",
+]
